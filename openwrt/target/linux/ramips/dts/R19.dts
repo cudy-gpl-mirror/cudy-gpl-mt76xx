@@ -1,0 +1,148 @@
+/dts-v1/;
+
+#include "mt7628an.dtsi"
+
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/gpio/gpio.h>
+
+/ {
+	compatible = "OEM,MT7628", "mediatek,mt7628an-soc";
+	model = "R19";
+
+	chosen {
+		bootargs = "console=ttyS0,115200";
+	};
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0 0x4000000>;
+	};
+
+	gpio-leds {
+		compatible = "gpio-leds";
+		status {
+			label = "oem:green:status";
+			gpios = <&gpio0 0 GPIO_ACTIVE_LOW>;
+		};
+
+		red {
+			label = "oem:green:red";
+			gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;
+		};
+
+		lan1 {
+			label = "oem:green:lan1";
+			gpios = <&gpio1 11 GPIO_ACTIVE_LOW>;
+		};
+
+		lan2 {
+			label = "oem:green:lan2";
+			gpios = <&gpio1 10 GPIO_ACTIVE_LOW>;
+		};
+
+		lan3 {
+			label = "oem:green:lan3";
+			gpios = <&gpio1 9 GPIO_ACTIVE_LOW>;
+		};
+
+		lan4 {
+			label = "oem:green:lan4";
+			gpios = <&gpio1 7 GPIO_ACTIVE_LOW>;
+		};
+	};
+
+	gpio_export {
+		compatible = "gpio-export";
+		#size-cells = <0>;
+
+		pwr {
+			gpio-export,name = "pwr";
+			gpio-export,output = <0>;
+			gpios = <&gpio1 6 GPIO_ACTIVE_HIGH>;
+		};
+
+		usb4g {
+			gpio-export,name = "4g";
+			gpio-export,output = <0>;
+			gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;
+		};
+	};
+
+	gpio-keys-polled {
+		compatible = "gpio-keys-polled";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		poll-interval = <20>;
+		reset {
+			label = "reset";
+			gpios = <&gpio0 11 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
+		};
+
+		wps {
+			label = "wps";
+			gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_WPS_BUTTON>;
+		};
+	};
+};
+
+&ethernet {
+	mtd-mac-address = <&bdinfo 0xDE00>;
+	mediatek,port-map = "lllwl";
+};
+
+&pinctrl {
+	state_default: pinctrl0 {
+		gpio {
+			ralink,group = "refclk", "wled_an", "gpio", "spi cs1";
+			ralink,function = "gpio";
+		};
+	};
+};
+
+&wmac {
+	status = "okay";
+};
+
+&pcie {
+	status = "okay";
+};
+
+&spi0 {
+	status = "okay";
+
+	m25p80@0 {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <10000000>;
+		m25p,chunked-io = <32>;
+
+		partition@0 {
+			label = "u-boot";
+			reg = <0x0 0x30000>;
+		};
+
+		partition@30000 {
+			label = "u-boot-env";
+			reg = <0x30000 0x10000>;
+		};
+
+		factory: partition@40000 {
+			label = "factory";
+			reg = <0x40000 0x10000>;
+		};
+
+		bdinfo: partition@7f0000 {
+			label = "bdinfo";
+			reg = <0x7f0000 0x10000>;
+		};
+
+		partition@50000 {
+			label = "firmware";
+			reg = <0x50000 0x7a0000>;
+		};
+	};
+};

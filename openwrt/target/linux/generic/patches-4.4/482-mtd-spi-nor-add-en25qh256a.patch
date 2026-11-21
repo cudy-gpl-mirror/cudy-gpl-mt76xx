@@ -1,0 +1,20 @@
+--- a/include/linux/mtd/spi-nor.h
++++ b/include/linux/mtd/spi-nor.h
+@@ -26,6 +26,7 @@
+ #define SNOR_MFR_MACRONIX	CFI_MFR_MACRONIX
+ #define SNOR_MFR_SPANSION	CFI_MFR_AMD
+ #define SNOR_MFR_SST		CFI_MFR_SST
++#define SNOR_MFR_EON		CFI_MFR_EON
+ #define SNOR_MFR_WINBOND	0xef /* Also used by some Spansion */
+ 
+ /*
+--- a/drivers/mtd/spi-nor/spi-nor.c
++++ b/drivers/mtd/spi-nor/spi-nor.c
+@@ -196,6 +196,7 @@
+ 		need_wren = true;
+ 	case SNOR_MFR_MACRONIX:
+ 	case SNOR_MFR_WINBOND:
++	case SNOR_MFR_EON:
+ 		if (need_wren)
+ 			write_enable(nor);
+ 

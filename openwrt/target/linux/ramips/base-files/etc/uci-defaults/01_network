@@ -1,0 +1,18 @@
+#!/bin/sh
+#
+
+. /lib/ramips.sh
+
+board=$(ramips_board_name)
+
+case "$board" in
+*)
+	uci -q get network.lan.def_ipaddr || {
+		uci set network.lan.def_ipaddr="192.168.10.1"
+		uci set network.lan.ipaddr='192.168.10.1'
+	}
+	;;
+esac
+
+uci commit network
+exit 0

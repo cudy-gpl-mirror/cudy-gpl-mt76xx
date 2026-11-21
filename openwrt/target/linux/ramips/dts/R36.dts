@@ -1,0 +1,153 @@
+/dts-v1/;
+
+#include "mt7620a.dtsi"
+
+#include <dt-bindings/input/input.h>
+
+/ {
+	compatible = "OEM,MT7620", "ralink,mt7620a-soc";
+	model = "R36";
+
+	chosen {
+		bootargs = "console=ttyS0,115200";
+	};
+
+	gpio-keys-polled {
+		compatible = "gpio-keys-polled";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		poll-interval = <20>;
+
+		reset {
+			label = "reset";
+			gpios = <&gpio0 12 1>;
+			linux,code = <KEY_RESTART>;
+		};
+	};
+
+	gpio-leds {
+		compatible = "gpio-leds";
+		status {
+			label = "oem:green:status";
+			gpios = <&gpio0 9 1>;
+		};
+
+		internet {
+			label = "oem:green:internet";
+			gpios = <&gpio0 11 1>;
+		};
+		
+		wifi {
+			label = "oem:green:wifi";
+			gpios = <&gpio3 0 1>;
+		};
+
+		wifi_5g {
+			label = "oem:green:wifi_5g";
+			gpios = <&gpio0 7 1>;
+		};
+	};
+
+	gpio-export {
+		compatible = "gpio-export";
+		usb2 {
+			gpio-export,name = "usb2";
+			gpio-export,output = <1>; // OUT_INIT_LOW
+			gpios = <&gpio0 13 1>;    // GPIO 11, ACTIVE_LOW
+		};
+	};
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&gpio2 {
+	status = "okay";
+};
+
+&gpio3 {
+	status = "okay";
+};
+
+&spi0 {
+	status = "okay";
+
+	m25p80@0 {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <10000000>;
+
+		partition@0 {
+			label = "u-boot";
+			reg = <0x0 0x30000>;
+		};
+
+		partition@30000 {
+			label = "u-boot-env";
+			reg = <0x30000 0x10000>;
+		};
+
+		factory: partition@40000 {
+			label = "factory";
+			reg = <0x40000 0x10000>;
+		};
+
+		backup: partition@fe0000 {
+			label = "backup";
+			reg = <0x7e0000 0x10000>;
+		};
+
+		bdinfo: partition@ff0000 {
+			label = "bdinfo";
+			reg = <0x7f0000 0x10000>;
+		};
+
+		partition@50000 {
+			label = "firmware";
+			reg = <0x50000 0x790000>;
+		};
+	};
+};
+
+&ehci {
+	status = "okay";
+};
+
+&ohci {
+	status = "okay";
+};
+
+&sdhci {
+	status = "okay";
+};
+
+&pcie {
+	status = "okay";
+};
+	
+&wmac {
+	ralink,mtd-eeprom = <&factory 0>;
+};
+
+&pinctrl {
+	state_default: pinctrl0 {
+		default {
+			ralink,group = "ephy", "wled", "pa", "i2c", "wdt", "uartf", "rgmii1","spi refclk";
+			ralink,function = "gpio";
+		};
+	};
+};
+
+&gsw {
+	mediatek,port4 = "ephy";
+};
+
+&ethernet {
+	pinctrl-names = "default";
+	pinctrl-0 = <&ephy_pins>;
+	mtd-mac-address = <&bdinfo 0xDE00>;
+	mediatek,portmap = "wllll";
+};

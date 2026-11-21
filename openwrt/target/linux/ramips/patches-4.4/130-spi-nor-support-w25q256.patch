@@ -1,0 +1,441 @@
+--- a/include/linux/mtd/spi-nor.h
++++ b/include/linux/mtd/spi-nor.h
+@@ -43,8 +43,10 @@
+ #define SPINOR_OP_WRSR		0x01	/* Write status register 1 byte */
+ #define SPINOR_OP_READ		0x03	/* Read data bytes (low frequency) */
+ #define SPINOR_OP_READ_FAST	0x0b	/* Read data bytes (high frequency) */
+-#define SPINOR_OP_READ_1_1_2	0x3b	/* Read data bytes (Dual SPI) */
+-#define SPINOR_OP_READ_1_1_4	0x6b	/* Read data bytes (Quad SPI) */
++#define SPINOR_OP_READ_1_1_2	0x3b	/* Read data bytes (Dual Output SPI) */
++#define SPINOR_OP_READ_1_2_2	0xbb	/* Read data bytes (Dual I/O SPI) */
++#define SPINOR_OP_READ_1_1_4	0x6b	/* Read data bytes (Quad Output SPI) */
++#define SPINOR_OP_READ_1_4_4	0xeb	/* Read data bytes (Quad I/O SPI) */
+ #define SPINOR_OP_PP		0x02	/* Page program (up to 256 bytes) */
+ #define SPINOR_OP_BE_4K		0x20	/* Erase 4KiB block */
+ #define SPINOR_OP_BE_4K_PMC	0xd7	/* Erase 4KiB block on PMC chips */
+@@ -59,10 +61,21 @@
+ #define SPINOR_OP_READ4		0x13	/* Read data bytes (low frequency) */
+ #define SPINOR_OP_READ4_FAST	0x0c	/* Read data bytes (high frequency) */
+ #define SPINOR_OP_READ4_1_1_2	0x3c	/* Read data bytes (Dual SPI) */
++#define SPINOR_OP_READ4_1_2_2	0xbc	/* Read data bytes (Dual I/O SPI) */
+ #define SPINOR_OP_READ4_1_1_4	0x6c	/* Read data bytes (Quad SPI) */
++#define SPINOR_OP_READ4_1_4_4	0xec	/* Read data bytes (Quad I/O SPI) */
+ #define SPINOR_OP_PP_4B		0x12	/* Page program (up to 256 bytes) */
+ #define SPINOR_OP_SE_4B		0xdc	/* Sector erase (usually 64KiB) */
+ 
++/* Double Transfer Rate opcodes - defined in JEDEC JESD216B. */
++#define SPINOR_OP_READ_1_1_1_DTR	0x0d
++#define SPINOR_OP_READ_1_2_2_DTR	0xbd
++#define SPINOR_OP_READ_1_4_4_DTR	0xed
++
++#define SPINOR_OP_READ_1_1_1_DTR_4B	0x0e
++#define SPINOR_OP_READ_1_2_2_DTR_4B	0xbe
++#define SPINOR_OP_READ_1_4_4_DTR_4B	0xee
++
+ /* Used for SST flashes only. */
+ #define SPINOR_OP_BP		0x02	/* Byte program */
+ #define SPINOR_OP_WRDI		0x04	/* Write disable */
+@@ -71,6 +84,8 @@
+ /* Used for Macronix and Winbond flashes. */
+ #define SPINOR_OP_EN4B		0xb7	/* Enter 4-byte mode */
+ #define SPINOR_OP_EX4B		0xe9	/* Exit 4-byte mode */
++#define SPINOR_OP_WREAR		0xc5	/* Write extended address register */
++#define SPINOR_OP_RDXCR		0x15	/* Read extended configuration register */
+ 
+ /* Used for Spansion flashes only. */
+ #define SPINOR_OP_BRWR		0x17	/* Bank register write */
+@@ -98,6 +113,7 @@
+ 
+ /* Configuration Register bits. */
+ #define CR_QUAD_EN_SPAN		BIT(1)	/* Spansion Quad I/O */
++#define XCR_DEF_4B_ADDR_MODE	BIT(1)	/* Winbond 4B mode default */
+ 
+ enum read_mode {
+ 	SPI_NOR_NORMAL = 0,
+@@ -118,6 +134,7 @@
+ enum spi_nor_option_flags {
+ 	SNOR_F_USE_FSR		= BIT(0),
+ 	SNOR_F_SST		= BIT(1),
++	SNOR_F_4B_EXT_ADDR	= BIT(6),
+ };
+ 
+ /**
+@@ -167,6 +184,7 @@
+ 	enum read_mode		flash_read;
+ 	bool			sst_write_second;
+ 	u32			flags;
++	u8			ext_addr;
+ 	u8			cmd_buf[SPI_NOR_MAX_CMD_SIZE];
+ 
+ 	int (*prepare)(struct spi_nor *nor, enum spi_nor_ops ops);
+--- a/drivers/mtd/spi-nor/spi-nor.c
++++ b/drivers/mtd/spi-nor/spi-nor.c
+@@ -69,6 +69,10 @@
+ #define	SPI_NOR_QUAD_READ	0x40    /* Flash supports Quad Read */
+ #define	USE_FSR			0x80	/* use flag status register */
+ #define	SPI_NOR_HAS_LOCK	0x100	/* Flash supports lock/unlock via SR */
++#define SPI_NOR_4B_READ_OP	BIT(15)	/*
++					 * Like SPI_NOR_4B_OPCODES, but for read
++					 * op code only.
++					 */
+ };
+ 
+ #define JEDEC_MFR(info)	((info)->id[0])
+@@ -116,22 +120,32 @@
+ /*
+  * Read configuration register, returning its value in the
+  * location. Return the configuration register value.
+- * Returns negative if error occured.
++ * Returns negative if error occurred.
+  */
+-static int read_cr(struct spi_nor *nor)
++static int _read_cr(struct spi_nor *nor, u8 reg)
+ {
+ 	int ret;
+ 	u8 val;
+ 
+-	ret = nor->read_reg(nor, SPINOR_OP_RDCR, &val, 1);
++	ret = nor->read_reg(nor, reg, &val, 1);
+ 	if (ret < 0) {
+-		dev_err(nor->dev, "error %d reading CR\n", ret);
++		dev_err(nor->dev, "error %d reading %s\n", ret,
++			(reg==SPINOR_OP_RDCR)?"CR":"XCR");
+ 		return ret;
+ 	}
+ 
+ 	return val;
+ }
+ 
++static inline int read_cr(struct spi_nor *nor) {
++	return _read_cr(nor, SPINOR_OP_RDCR);
++}
++
++static inline int read_xcr(struct spi_nor *nor) {
++	return _read_cr(nor, SPINOR_OP_RDXCR);
++}
++
++
+ /*
+  * Dummy Cycle calculation for different type of read.
+  * It can be used to support more commands with
+@@ -182,6 +196,47 @@
+ 	return mtd->priv;
+ }
+ 
++
++static u8 spi_nor_convert_opcode(u8 opcode, const u8 table[][2], size_t size)
++{
++	size_t i;
++
++	for (i = 0; i < size; i++)
++		if (table[i][0] == opcode)
++			return table[i][1];
++
++	/* No conversion found, keep input op code. */
++	return opcode;
++}
++
++static inline u8 spi_nor_convert_3to4_read(u8 opcode)
++{
++	static const u8 spi_nor_3to4_read[][2] = {
++		{ SPINOR_OP_READ,	SPINOR_OP_READ4 },
++		{ SPINOR_OP_READ_FAST,	SPINOR_OP_READ4_FAST },
++		{ SPINOR_OP_READ_1_1_2,	SPINOR_OP_READ4_1_1_2 },
++		{ SPINOR_OP_READ_1_2_2,	SPINOR_OP_READ4_1_2_2 },
++		{ SPINOR_OP_READ_1_1_4,	SPINOR_OP_READ4_1_1_4 },
++		{ SPINOR_OP_READ_1_4_4,	SPINOR_OP_READ4_1_4_4 },
++
++		{ SPINOR_OP_READ_1_1_1_DTR,	SPINOR_OP_READ_1_1_1_DTR_4B },
++		{ SPINOR_OP_READ_1_2_2_DTR,	SPINOR_OP_READ_1_2_2_DTR_4B },
++		{ SPINOR_OP_READ_1_4_4_DTR,	SPINOR_OP_READ_1_4_4_DTR_4B },
++	};
++
++	return spi_nor_convert_opcode(opcode, spi_nor_3to4_read,
++				      ARRAY_SIZE(spi_nor_3to4_read));
++}
++
++static void spi_nor_set_4byte_read(struct spi_nor *nor,
++				   const struct flash_info *info)
++{
++	nor->addr_width = 3;
++	nor->ext_addr = 0;
++	nor->read_opcode = spi_nor_convert_3to4_read(nor->read_opcode);
++	nor->flags |= SNOR_F_4B_EXT_ADDR;
++}
++
+ /* Enable/disable 4-byte addressing mode. */
+ static inline int set_4byte(struct spi_nor *nor, const struct flash_info *info,
+ 			    int enable)
+@@ -314,6 +369,37 @@
+ 	mutex_unlock(&nor->lock);
+ }
+ 
++
++static int spi_nor_check_ext_addr(struct spi_nor *nor, u32 addr)
++{
++	bool ext_addr;
++	int ret;
++	u8 cmd;
++
++	if (!(nor->flags & SNOR_F_4B_EXT_ADDR))
++		return 0;
++
++	ext_addr = !!(addr & 0xff000000);
++	if (nor->ext_addr == ext_addr)
++		return 0;
++
++	cmd = ext_addr ? SPINOR_OP_EN4B : SPINOR_OP_EX4B;
++	write_enable(nor);
++	ret = nor->write_reg(nor, cmd, NULL, 0);
++	if (ret)
++		return ret;
++
++	cmd = 0;
++	ret = nor->write_reg(nor, SPINOR_OP_WREAR, &cmd, 1);
++	if (ret)
++		return ret;
++
++	nor->addr_width = 3 + ext_addr;
++	nor->ext_addr = ext_addr;
++	write_disable(nor);
++	return 0;
++}
++
+ /*
+  * Erase an address range on the nor chip.  The address range may extend
+  * one or more erase sectors.  Return an error is there is a problem erasing.
+@@ -339,6 +425,10 @@
+ 	if (ret)
+ 		return ret;
+ 
++	ret = spi_nor_check_ext_addr(nor, addr + len);
++	if (ret)
++		return ret;
++
+ 	/* whole-chip erase? */
+ 	if (len == mtd->size) {
+ 		unsigned long timeout;
+@@ -389,6 +479,7 @@
+ 
+ 	write_disable(nor);
+ 
++	spi_nor_check_ext_addr(nor, 0);
+ 	spi_nor_unlock_and_unprep(nor, SPI_NOR_OPS_ERASE);
+ 
+ 	instr->state = MTD_ERASE_DONE;
+@@ -397,6 +488,7 @@
+ 	return ret;
+ 
+ erase_err:
++	spi_nor_check_ext_addr(nor, 0);
+ 	spi_nor_unlock_and_unprep(nor, SPI_NOR_OPS_ERASE);
+ 	instr->state = MTD_ERASE_FAILED;
+ 	return ret;
+@@ -578,7 +670,9 @@
+ 	if (ret)
+ 		return ret;
+ 
++	spi_nor_check_ext_addr(nor, ofs + len);
+ 	ret = nor->flash_lock(nor, ofs, len);
++	spi_nor_check_ext_addr(nor, 0);
+ 
+ 	spi_nor_unlock_and_unprep(nor, SPI_NOR_OPS_UNLOCK);
+ 	return ret;
+@@ -593,7 +687,9 @@
+ 	if (ret)
+ 		return ret;
+ 
++	spi_nor_check_ext_addr(nor, ofs + len);
+ 	ret = nor->flash_unlock(nor, ofs, len);
++	spi_nor_check_ext_addr(nor, 0);
+ 
+ 	spi_nor_unlock_and_unprep(nor, SPI_NOR_OPS_LOCK);
+ 	return ret;
+@@ -688,7 +784,7 @@
+ 	{ "en25qh64a",  INFO(0x1c7017, 0, 64 * 1024,  128, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+ 	{ "en25qh128",  INFO(0x1c7018, 0, 64 * 1024,  256, 0) },
+ 	{ "en25qx128a", INFO(0x1c7118, 0, 64 * 1024,  256, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+-	{ "en25qh256",  INFO(0x1c7019, 0, 64 * 1024,  512, 0) },
++	{ "en25qh256",  INFO(0x1c7019, 0, 64 * 1024,  512, SPI_NOR_4B_READ_OP) },
+ 	{ "en25s64",	INFO(0x1c3817, 0, 64 * 1024,  128, SECT_4K) },
+ 
+ 	/* ESMT */
+@@ -846,7 +942,7 @@
+ 	{ "w25q80", INFO(0xef5014, 0, 64 * 1024,  16, SECT_4K) },
+ 	{ "w25q80bl", INFO(0xef4014, 0, 64 * 1024,  16, SECT_4K) },
+ 	{ "w25q128", INFO(0xef4018, 0, 64 * 1024, 256, SECT_4K) },
+-	{ "w25q256", INFO(0xef4019, 0, 64 * 1024, 512, SECT_4K) },
++	{ "w25q256", INFO(0xef4019, 0, 64 * 1024, 512, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_4B_READ_OP) },
+ 
+ 	/* Catalyst / On Semiconductor -- non-JEDEC */
+ 	{ "cat25c11", CAT25_INFO(  16, 8, 16, 1, SPI_NOR_NO_ERASE | SPI_NOR_NO_FR) },
+@@ -871,7 +967,7 @@
+ 
+ 	tmp = nor->read_reg(nor, SPINOR_OP_RDID, id, SPI_NOR_MAX_ID_LEN);
+ 	if (tmp < 0) {
+-		dev_dbg(nor->dev, " error %d reading JEDEC ID\n", tmp);
++		dev_dbg(nor->dev, "error %d reading JEDEC ID\n", tmp);
+ 		return ERR_PTR(tmp);
+ 	}
+ 
+@@ -882,7 +978,7 @@
+ 				return &spi_nor_ids[tmp];
+ 		}
+ 	}
+-	dev_err(nor->dev, "unrecognized JEDEC id bytes: %02x, %2x, %2x\n",
++	dev_err(nor->dev, "unrecognized JEDEC id bytes: %02x, %02x, %02x\n",
+ 		id[0], id[1], id[2]);
+ 	return ERR_PTR(-ENODEV);
+ }
+@@ -891,7 +987,7 @@
+ 			size_t *retlen, u_char *buf)
+ {
+ 	struct spi_nor *nor = mtd_to_spi_nor(mtd);
+-	int ret;
++	ssize_t ret;
+ 
+ 	dev_dbg(nor->dev, "from 0x%08x, len %zd\n", (u32)from, len);
+ 
+@@ -899,8 +995,23 @@
+ 	if (ret)
+ 		return ret;
+ 
++	if (nor->flags & SNOR_F_4B_EXT_ADDR)
++		nor->addr_width = 4;
++
+ 	ret = nor->read(nor, from, len, retlen, buf);
+ 
++	if (nor->flags & SNOR_F_4B_EXT_ADDR) {
++		u8 val = 0;
++
++		if ((from + len) & 0xff000000) {
++			write_enable(nor);
++			nor->write_reg(nor, SPINOR_OP_WREAR, &val, 1);
++			write_disable(nor);
++		}
++
++		nor->addr_width = 3;
++	}
++
+ 	spi_nor_unlock_and_unprep(nor, SPI_NOR_OPS_READ);
+ 	return ret;
+ }
+@@ -989,6 +1100,10 @@
+ 	if (ret)
+ 		return ret;
+ 
++	ret = spi_nor_check_ext_addr(nor, to + len);
++	if (ret < 0)
++		return ret;
++
+ 	write_enable(nor);
+ 
+ 	page_offset = to & (nor->page_size - 1);
+@@ -1019,6 +1134,7 @@
+ 
+ 	ret = spi_nor_wait_till_ready(nor);
+ write_err:
++	spi_nor_check_ext_addr(nor, 0);
+ 	spi_nor_unlock_and_unprep(nor, SPI_NOR_OPS_WRITE);
+ 	return ret;
+ }
+@@ -1364,7 +1480,16 @@
+ 	else if (mtd->size > 0x1000000) {
+ 		/* enable 4-byte addressing if the device exceeds 16MiB */
+ 		nor->addr_width = 4;
+-		if (JEDEC_MFR(info) == SNOR_MFR_SPANSION) {
++		if (info->flags & SPI_NOR_4B_READ_OP) {
++			if (JEDEC_MFR(info) == SNOR_MFR_WINBOND) {
++				ret = read_xcr(nor);
++				if (!(ret > 0 && (ret & XCR_DEF_4B_ADDR_MODE)))
++					spi_nor_set_4byte_read(nor, info);
++				else
++					set_4byte(nor, info, 1);
++			} else
++				spi_nor_set_4byte_read(nor, info);
++		} else if (JEDEC_MFR(info) == SNOR_MFR_SPANSION) {
+ 			/* Dedicated 4-byte command set */
+ 			switch (nor->flash_read) {
+ 			case SPI_NOR_QUAD:
+--- a/drivers/spi/spi-mt7621.c
++++ b/drivers/spi/spi-mt7621.c
+@@ -65,7 +65,6 @@
+ 	unsigned int		sys_freq;
+ 	unsigned int		speed;
+ 	struct clk		*clk;
+-	spinlock_t		lock;
+ 
+ 	struct mt7621_spi_ops	*ops;
+ };
+@@ -91,9 +90,11 @@
+ 
+ 	master |= 7 << 29;
+ 	master |= 1 << 2;
++#ifdef CONFIG_SOC_MT7620
+ 	if (duplex)
+ 		master |= 1 << 10;
+ 	else
++#endif
+ 		master &= ~(1 << 10);
+ 
+ 	mt7621_spi_write(rs, MT7621_SPI_MASTER, master);
+@@ -202,10 +203,12 @@
+ 		if (t->speed_hz < speed)
+ 			speed = t->speed_hz;
+ 
+-		if (WARN_ON(len + t->len > 36)) {
+-			status = -EIO;
+-			goto msg_done;
+-		}
++		/*
++		 * m25p80 might attempt to write more data than we can handle.
++		 * truncate the message to what we can fit into the registers
++		 */
++		if (len + t->len > 36)
++			t->len = 36 - len;
+ 
+ 		for (i = 0; i < t->len; i++, len++)
+ 			data[len / 4] |= buf[i] << (8 * (len & 3));
+@@ -266,6 +269,7 @@
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_SOC_MT7620
+ static int mt7621_spi_transfer_full_duplex(struct spi_master *master,
+ 					   struct spi_message *m)
+ {
+@@ -350,15 +354,18 @@
+ 
+ 	return 0;
+ }
++#endif
+ 
+ static int mt7621_spi_transfer_one_message(struct spi_master *master,
+ 					   struct spi_message *m)
+ {
++#ifdef CONFIG_SOC_MT7620
+ 	struct spi_device *spi = m->spi;
+ 	int cs = spi->chip_select;
+ 
+ 	if (cs)
+ 		return mt7621_spi_transfer_full_duplex(master, m);
++#endif
+ 	return mt7621_spi_transfer_half_duplex(master, m);
+ }
+ 
+@@ -390,7 +397,6 @@
+ 	const struct of_device_id *match;
+ 	struct spi_master *master;
+ 	struct mt7621_spi *rs;
+-	unsigned long flags;
+ 	void __iomem *base;
+ 	struct resource *r;
+ 	int status = 0;
+@@ -441,7 +447,6 @@
+ 	rs->sys_freq = clk_get_rate(rs->clk);
+ 	rs->ops = ops;
+ 	dev_info(&pdev->dev, "sys_freq: %u\n", rs->sys_freq);
+-	spin_lock_irqsave(&rs->lock, flags);
+ 
+ 	device_reset(&pdev->dev);
+ 

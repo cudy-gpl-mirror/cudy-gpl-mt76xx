@@ -1,0 +1,2 @@
+#!/bin/sh
+PKG_CONFIG_LIBDIR=${PKG_CONFIG_LIBDIR:-/opt/buildroot-gcc492_mips_glibc/usr/mipsel-buildroot-linux-gnu/sysroot/usr/lib/pkgconfig:/opt/buildroot-gcc492_mips_glibc/usr/mipsel-buildroot-linux-gnu/sysroot/usr/share/pkgconfig} PKG_CONFIG_SYSROOT_DIR=${PKG_CONFIG_SYSROOT_DIR:-/opt/buildroot-gcc492_mips_glibc/usr/mipsel-buildroot-linux-gnu/sysroot} $(dirname $0)/pkgconf  $@
